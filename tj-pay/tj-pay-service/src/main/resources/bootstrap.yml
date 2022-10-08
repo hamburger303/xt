@@ -34,7 +34,7 @@ tj:
   jdbc:
     database: tj_pay
   pay:
-    notifyHost: https://bd6ab03.r3.cpolar.top/ps
+    notifyHost: https://6b9f16dd.r2.cpolar.top/ps
     ali:
       appId: "2021002173680104"
       merchantPrivateKey: ${ALI_PAY_PRIVATE_KEY}
