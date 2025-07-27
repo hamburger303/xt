@@ -43,5 +43,6 @@ tj:
       includeLoginPaths:
         - /menus/me
         - /accounts/logout
+
   jdbc:
     database: tj_auth

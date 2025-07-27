@@ -1,0 +1,26 @@
+package com.tianji.promotion.config;
+
+import com.tianji.common.autoconfigure.xxljob.XxlJobProperties;
+import com.xxl.job.core.executor.XxlJobExecutor;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.Executor;
+import java.util.concurrent.ThreadPoolExecutor;
+
+@Configuration
+public class PromotionConfig {
+
+    @Bean
+    public Executor generateExchangeCodeExecutor(){
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(5);
+        executor.setQueueCapacity(200);
+        executor.setThreadNamePrefix("exchange-code-handle-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.initialize();
+        return executor;
+    }
+}
