@@ -6,6 +6,7 @@ import com.tianji.common.constants.MqConstants;
 import com.tianji.common.exceptions.BadRequestException;
 import com.tianji.common.exceptions.BizIllegalException;
 import com.tianji.common.utils.BeanUtils;
+import com.tianji.common.utils.CollUtils;
 import com.tianji.common.utils.UserContext;
 import com.tianji.promotion.constants.PromotionConstants;
 import com.tianji.promotion.discount.DiscountStrategy;
@@ -37,6 +38,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -62,6 +69,8 @@ public class UserCouponServiceImpl extends ServiceImpl<UserCouponMapper, UserCou
     final RabbitMqHelper mqHelper;
 
     final ICouponScopeService couponScopeService;
+
+    final Executor discountSolutionExecutor;
     @Override
     @Transactional
     @MyLock(name = "lock:coupon:uid:#{id}",
@@ -257,12 +266,56 @@ public class UserCouponServiceImpl extends ServiceImpl<UserCouponMapper, UserCou
         for (List<Coupon> coupons : permute) {
             List<Long> cids = coupons.stream().map(Coupon::getId).collect(Collectors.toList());
         }
-        List<CouponDiscountDTO> discountDTOs = new ArrayList<>();
+        List<CouponDiscountDTO> discountDTOs = Collections.synchronizedList(new ArrayList<>(permute.size()));
+//        for (List<Coupon> coupons : permute) {
+//            CouponDiscountDTO discountDTO=calculateSolutionDiscount(availbleCouponMap, courses, coupons);
+//            discountDTOs.add(discountDTO);
+//        }
+        CountDownLatch latch = new CountDownLatch(permute.size());
         for (List<Coupon> coupons : permute) {
-            CouponDiscountDTO discountDTO=calculateSolutionDiscount(availbleCouponMap, courses, coupons);
-            discountDTOs.add(discountDTO);
+            CompletableFuture.supplyAsync(new Supplier<CouponDiscountDTO>() {
+                        @Override
+                        public CouponDiscountDTO get() {
+                            CouponDiscountDTO discountDTO=calculateSolutionDiscount(availbleCouponMap, courses, coupons);
+                            return discountDTO;
+                        }
+                    }, discountSolutionExecutor).thenAccept(new Consumer<CouponDiscountDTO>() {
+                @Override
+                public void accept(CouponDiscountDTO couponDiscountDTO) {
+                    discountDTOs.add(couponDiscountDTO);
+                    latch.countDown();
+                }
+            });
         }
-        return discountDTOs;
+        try {
+            latch.await(2, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+        return findBestSolution(discountDTOs);
+    }
+
+    private List<CouponDiscountDTO> findBestSolution(List<CouponDiscountDTO> discountDTOs) {
+        Map<String, CouponDiscountDTO> moreDiscountMap = new HashMap<>();
+        Map<Integer, CouponDiscountDTO> lessCouponMap = new HashMap<>();
+        for (CouponDiscountDTO solution : discountDTOs) {
+            String string = solution.getIds().stream()
+                    .sorted(Comparator.comparing(Long::valueOf))
+                    .map(String::valueOf)
+                    .collect(Collectors.joining(","));
+            CouponDiscountDTO discountDTO = moreDiscountMap.get(string);
+            if(discountDTO != null&& discountDTO.getDiscountAmount() >= solution.getDiscountAmount())
+                continue;
+            CouponDiscountDTO dto = lessCouponMap.get(solution.getDiscountAmount());
+            if(dto != null&& dto.getIds().size() <= solution.getIds().size()&& solution.getIds().size() > 1)
+                continue;
+            lessCouponMap.put(solution.getDiscountAmount(), solution);
+            moreDiscountMap.put(string, solution);
+        }
+        Collection<CouponDiscountDTO> intersection = CollUtils.intersection(moreDiscountMap.values(), lessCouponMap.values());
+        return intersection.stream()
+                .sorted(Comparator.comparingInt(CouponDiscountDTO::getDiscountAmount).reversed())
+                .collect(Collectors.toList());
     }
 
     private CouponDiscountDTO calculateSolutionDiscount(Map<Coupon, List<OrderCourseDTO>> availbleCouponMap,
